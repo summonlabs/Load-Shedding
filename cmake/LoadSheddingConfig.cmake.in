@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/LoadSheddingTargets.cmake")
+
+check_required_components(LoadShedding)
+
+set(LoadShedding_VERSION "@PROJECT_VERSION@")
+set(LoadShedding_VERSION_MAJOR "@PROJECT_VERSION_MAJOR@")
+set(LoadShedding_VERSION_MINOR "@PROJECT_VERSION_MINOR@")
+set(LoadShedding_VERSION_PATCH "@PROJECT_VERSION_PATCH@")

@@ -1,0 +1,10 @@
+add_executable(load_shedding_cli ls_cli.cpp cli_support.cpp)
+set_target_properties(load_shedding_cli PROPERTIES OUTPUT_NAME "load-shedding")
+target_link_libraries(load_shedding_cli PRIVATE load_shedding)
+target_include_directories(load_shedding_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+if(LOAD_SHEDDING_ENABLE_ASAN AND MSVC)
+  target_compile_options(load_shedding_cli PRIVATE /fsanitize=address)
+endif()
+load_shedding_apply_strict_options(load_shedding_cli)
+
+install(TARGETS load_shedding_cli RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")

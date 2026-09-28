@@ -1,0 +1,21 @@
+#pragma once
+
+// Generated from version.hpp.in by the Load Shedding CMake build.
+// Do not edit the generated copy; edit include/load_shedding/version.hpp.in.
+
+#define LOAD_SHEDDING_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define LOAD_SHEDDING_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define LOAD_SHEDDING_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define LOAD_SHEDDING_VERSION_STRING "@PROJECT_VERSION@"
+
+namespace load_shedding {
+
+/// Semantic version of the Load Shedding library as compiled into the artifact.
+struct Version {
+  static constexpr int major = LOAD_SHEDDING_VERSION_MAJOR;
+  static constexpr int minor = LOAD_SHEDDING_VERSION_MINOR;
+  static constexpr int patch = LOAD_SHEDDING_VERSION_PATCH;
+  static constexpr const char* string = LOAD_SHEDDING_VERSION_STRING;
+};
+
+}  // namespace load_shedding

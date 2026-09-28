@@ -1,0 +1,3 @@
+add_executable(bench_plan bench_plan.cpp)
+target_link_libraries(bench_plan PRIVATE load_shedding)
+load_shedding_apply_strict_options(bench_plan)
