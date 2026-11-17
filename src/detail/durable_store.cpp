@@ -586,16 +586,23 @@ Result<CommitRecord> DurableStore::commit(const StoreState& state, CrashPoint cr
   // ---- COMMIT POINT: the generation named by the marker is now authoritative.
   apply_crash_point(crash_point, CrashPoint::AfterHeadCommit);
 
+  // The handle records the commit here, where it happened. Advancing the
+  // watermark comes after the commit point, so a failure there is not a failed
+  // commit: returning it made the engine report a published change as
+  // unpublished and fall back to the generation before it, and the next commit
+  // then replaced the published generation. A watermark that could not be
+  // advanced now is advanced past this generation by the next commit.
+  commit_ = record;
+
   const std::filesystem::path watermark_path = root / std::string(store_format::kWatermarkName);
   const std::filesystem::path watermark_staging =
       root / (std::string(store_format::kWatermarkName) + std::string(store_format::kStagingSuffix));
   status = write_file_durable(watermark_staging, make_watermark(generation));
-  if (!status.ok()) {
-    return status;
+  if (status.ok()) {
+    status = replace_file_atomic(watermark_staging, watermark_path);
   }
-  status = replace_file_atomic(watermark_staging, watermark_path);
-  if (!status.ok()) {
-    return status;
+  if (status.ok()) {
+    watermark_ = generation;
   }
   apply_crash_point(crash_point, CrashPoint::AfterWatermark);
 
@@ -627,8 +634,6 @@ Result<CommitRecord> DurableStore::commit(const StoreState& state, CrashPoint cr
     }
   }
 
-  commit_ = record;
-  watermark_ = generation;
   return record;
 }
 

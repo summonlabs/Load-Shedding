@@ -381,3 +381,107 @@ LS_TEST(store, audit_history_is_monotonic_and_complete) {
   LS_REQUIRE_STATUS(engine.value().history(HistoryQuery{0, 100000, std::nullopt, std::nullopt}),
                     StatusCode::LimitExceeded);
 }
+
+LS_TEST(store, a_published_commit_is_not_reported_as_unpublished) {
+  ls_test::ScratchDirectory directory{"store"};
+  {
+    auto engine = ls_test::open_writer(directory.path(), 1);
+    LS_CHECK(engine.ok());
+    if (!engine.ok()) {
+      return;
+    }
+    LS_REQUIRE_OK(ls_test::install_policy(engine.value(), make_default_policy()));
+
+    // The rollback watermark is advanced after the commit marker names the new
+    // generation. Here it cannot be advanced: something that is not a file is
+    // where it is staged. The commit marker is committed all the same, so the
+    // snapshot is the authoritative state and the engine has to say so.
+    const std::filesystem::path obstacle =
+        std::filesystem::path(directory.path()) /
+        (std::string(store_format::kWatermarkName) + std::string(store_format::kStagingSuffix));
+    std::filesystem::create_directory(obstacle);
+    auto installed = ls_test::install_snapshot(engine.value(), facility(1, 100));
+    std::filesystem::remove(obstacle);
+    LS_CHECK_MSG(installed.ok(), installed.status().to_string());
+    LS_CHECK_EQ(engine.value().snapshot().loads.size(), std::size_t{2});
+
+    // The next commit continues from that state.
+    auto outcome = engine.value().plan(ls_test::plan_request(engine.value(), 1, 50000, 110));
+    LS_CHECK_MSG(outcome.ok(), outcome.status().to_string());
+  }
+  auto engine = ls_test::open_writer(directory.path(), 2);
+  LS_CHECK_MSG(engine.ok(), engine.status().to_string());
+  if (!engine.ok()) {
+    return;
+  }
+  LS_CHECK_EQ(engine.value().snapshot().loads.size(), std::size_t{2});
+  LS_CHECK_EQ(engine.value().plan_count(), std::size_t{1});
+  auto verify = engine.value().verify();
+  LS_CHECK(verify.ok());
+  LS_CHECK(verify.ok() && verify.value().ok);
+}
+
+LS_TEST(store, a_handle_that_takes_authority_continues_from_the_committed_state) {
+  ls_test::ScratchDirectory directory{"store"};
+  {
+    auto engine = ls_test::open_writer(directory.path(), 1);
+    LS_CHECK(engine.ok());
+    if (!engine.ok()) {
+      return;
+    }
+    LS_REQUIRE_OK(ls_test::install_policy(engine.value(), make_default_policy()));
+    LS_REQUIRE_OK(ls_test::install_snapshot(engine.value(), facility(1, 100)));
+  }
+
+  auto first = ls_test::open_reader(directory.path());
+  LS_CHECK_MSG(first.ok(), first.status().to_string());
+  if (!first.ok()) {
+    return;
+  }
+  {
+    // While another handle reads the store the first cannot take authority, and
+    // the attempt costs it its own claim on the store.
+    auto second = ls_test::open_reader(directory.path());
+    LS_CHECK_MSG(second.ok(), second.status().to_string());
+    LS_REQUIRE_STATUS(
+        first.value().take_authority(Incarnation::from_value(7), AuthorityEpoch::from_value(50)),
+        StatusCode::LockConflict);
+  }
+
+  // A writer session then changes the committed state and ends.
+  {
+    auto writer = ls_test::open_writer(directory.path(), 2);
+    LS_CHECK_MSG(writer.ok(), writer.status().to_string());
+    if (!writer.ok()) {
+      return;
+    }
+    const FacilitySnapshot wider = ls_test::FacilityBuilder()
+                                       .tick(200)
+                                       .evidence_generation(2)
+                                       .load("load-a", 120000, PriorityClass::Standard)
+                                       .load("load-b", 30000, PriorityClass::Optional)
+                                       .load("load-c", 10000, PriorityClass::Optional)
+                                       .total_demand(200000)
+                                       .build();
+    LS_REQUIRE_OK(ls_test::install_snapshot(writer.value(), wider));
+  }
+
+  // The first handle takes authority now. What it takes authority over is the
+  // committed state, not the state it read when it was opened: publishing from
+  // that would put the store back to before the writer session.
+  auto taken =
+      first.value().take_authority(Incarnation::from_value(7), AuthorityEpoch::from_value(50));
+  LS_CHECK_MSG(taken.ok(), taken.status().to_string());
+  LS_CHECK_EQ(first.value().snapshot().loads.size(), std::size_t{3});
+  LS_REQUIRE_OK_STATUS(first.value().close());
+
+  auto reopened = ls_test::open_reader(directory.path());
+  LS_CHECK_MSG(reopened.ok(), reopened.status().to_string());
+  if (!reopened.ok()) {
+    return;
+  }
+  LS_CHECK_EQ(reopened.value().snapshot().loads.size(), std::size_t{3});
+  auto verify = reopened.value().verify();
+  LS_CHECK(verify.ok());
+  LS_CHECK(verify.ok() && verify.value().ok);
+}

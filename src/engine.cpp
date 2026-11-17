@@ -476,11 +476,43 @@ Result<AuthorityEpoch> Engine::take_authority(Incarnation incarnation, Authority
     }
     impl.lock = std::make_unique<detail::FileLock>(std::move(lock.value()));
   }
+  // A handle that is not the writer gives the store lock back when the takeover
+  // does not happen: kept, it shut every other process out of the store while
+  // this handle could not write to it either.
+  const bool was_writer = impl.writer;
+  const auto abandon = [&impl, was_writer](Status status) {
+    impl.writer = was_writer;
+    if (!was_writer && impl.lock != nullptr) {
+      const Status released = impl.lock->release();
+      (void)released;
+      impl.lock.reset();
+    }
+    return status;
+  };
+  if (!was_writer) {
+    // This handle may have read the store long before this call, and nothing it
+    // held kept writers out in the meantime. Publishing from what it read then
+    // would replace every generation committed since and put the watermark back.
+    // The takeover continues from the committed state, read under the lock.
+    auto store = detail::DurableStore::open(impl.options.store_directory, false);
+    if (!store.ok()) {
+      return abandon(store.status());
+    }
+    auto committed = store.value().load_committed();
+    if (committed.ok()) {
+      impl.state = std::move(committed.value());
+    } else if (committed.code() == StatusCode::NotFound) {
+      impl.state = detail::StoreState{};
+    } else {
+      return abandon(committed.status());
+    }
+    impl.store = std::move(store.value());
+  }
   if (requested_epoch <= impl.state.authority_epoch) {
-    return Status::error(StatusCode::StaleAuthority,
-                         "requested epoch " + std::to_string(requested_epoch.value()) +
-                             " is not ahead of the current epoch " +
-                             std::to_string(impl.state.authority_epoch.value()));
+    return abandon(Status::error(StatusCode::StaleAuthority,
+                                 "requested epoch " + std::to_string(requested_epoch.value()) +
+                                     " is not ahead of the current epoch " +
+                                     std::to_string(impl.state.authority_epoch.value())));
   }
   impl.state.authority_epoch = requested_epoch;
   impl.state.incarnation = incarnation;
@@ -489,7 +521,7 @@ Result<AuthorityEpoch> Engine::take_authority(Incarnation incarnation, Authority
                     "writer authority taken at epoch " + std::to_string(requested_epoch.value()));
   const Status published = impl.publish("the authority takeover");
   if (!published.ok()) {
-    return published;
+    return abandon(published);
   }
   return requested_epoch;
 }
